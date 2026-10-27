@@ -1,0 +1,87 @@
+services:
+  # ── etcd：Milvus 的依赖 ──
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+
+  # ── MinIO：Milvus 的对象存储 ──
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - minio_data:/minio_data
+    command: minio server /minio_data
+
+  # ── Milvus：向量数据库 ──
+  milvus:
+    image: milvusdb/milvus:v2.4.6
+    command: [ "milvus", "run", "standalone" ]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    ports:
+      - "19530:19530"
+    depends_on:
+      - etcd
+      - minio
+    volumes:
+      - milvus_data:/var/lib/milvus
+
+  # ── Neo4j：知识图谱数据库 ──
+  neo4j:
+    image: neo4j:5.20.0
+    environment:
+      - NEO4J_AUTH=neo4j/neo4j123
+      - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474" # 浏览器界面
+      - "7687:7687" # Bolt 协议
+    volumes:
+      - neo4j_data:/data
+
+  # ── RAG 应用 ──
+  rag-app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - milvus
+      - neo4j
+    environment:
+      # DeepSeek API
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL}
+      # 图谱 LLM（可以跟 DeepSeek 同一个）
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
+      # Milvus 连接
+      - MILVUS_URI=http://milvus:19530
+      # Neo4j 连接
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=neo4j123
+      # 模型路径
+      - BGE_M3_PATH=/models/bge-m3
+      - RERANKER_PATH=/models/bge-reranker-v2-m3
+    volumes:
+      # 挂载模型文件（避免每次重新下载）
+      - ./models:/models
+      # 挂载上传文件目录
+      - ./uploads:/app/uploads
+
+volumes:
+  etcd_data:
+  minio_data:
+  milvus_data:
+  neo4j_data:
